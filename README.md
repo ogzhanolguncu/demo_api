@@ -1,1 +1,1 @@
-testing-local-depot-trigger-trigger
+testing-local-depot-trigger-trigger-trigger
