@@ -359,6 +359,521 @@ func main() {
 		_, _ = fmt.Fprint(w, os.Environ())
 	})
 
+	// Authentication middleware for database endpoints
+	// Uses SECRET_TOKEN environment variable
+	if secretToken == "" {
+		secretToken = "change-me-in-production"
+		slog.Warn("SECRET_TOKEN not set, using default password. Set SECRET_TOKEN environment variable!")
+	}
+
+	requireAuth := func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			auth := r.Header.Get("Authorization")
+
+			// Support both Bearer token and Basic auth
+			expectedBearer := "Bearer " + secretToken
+
+			if auth != expectedBearer {
+				w.Header().Set("WWW-Authenticate", `Bearer realm="Database Admin"`)
+				http.Error(w, "Unauthorized - Invalid or missing authentication token", http.StatusUnauthorized)
+				slog.Warn("Unauthorized database access attempt",
+					"remote_addr", r.RemoteAddr,
+					"path", r.URL.Path,
+				)
+				return
+			}
+
+			next(w, r)
+		}
+	}
+
+	// SQLite web admin panel
+	mux.HandleFunc("/v1/db-admin", requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		html := `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SQLite Database Admin</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        .header h1 { font-size: 28px; margin-bottom: 10px; }
+        .header p { opacity: 0.9; font-size: 14px; }
+        .content { padding: 30px; }
+        .section {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        .section h2 {
+            font-size: 18px;
+            margin-bottom: 15px;
+            color: #333;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .badge {
+            background: #667eea;
+            color: white;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        textarea, input[type="text"] {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 6px;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 14px;
+            resize: vertical;
+            transition: border-color 0.3s;
+        }
+        textarea:focus, input[type="text"]:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: transform 0.2s, box-shadow 0.2s;
+            margin-top: 10px;
+        }
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+        button:active { transform: translateY(0); }
+        .button-group { display: flex; gap: 10px; flex-wrap: wrap; }
+        .results {
+            background: white;
+            border: 2px solid #e0e0e0;
+            border-radius: 6px;
+            padding: 15px;
+            margin-top: 15px;
+            max-height: 500px;
+            overflow: auto;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        th {
+            background: #f8f9fa;
+            font-weight: 600;
+            color: #333;
+            position: sticky;
+            top: 0;
+        }
+        tr:hover { background: #f8f9fa; }
+        .schema-item {
+            background: white;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 10px;
+            border-left: 4px solid #667eea;
+        }
+        .schema-item h3 {
+            color: #667eea;
+            font-size: 16px;
+            margin-bottom: 8px;
+        }
+        .schema-sql {
+            background: #f8f9fa;
+            padding: 10px;
+            border-radius: 4px;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 12px;
+            overflow-x: auto;
+            white-space: pre-wrap;
+        }
+        .error {
+            background: #fee;
+            border: 2px solid #fcc;
+            color: #c33;
+            padding: 12px;
+            border-radius: 6px;
+            margin-top: 10px;
+        }
+        .success {
+            background: #efe;
+            border: 2px solid #cfc;
+            color: #363;
+            padding: 12px;
+            border-radius: 6px;
+            margin-top: 10px;
+        }
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #666;
+        }
+        pre {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 6px;
+            overflow-x: auto;
+            font-size: 13px;
+        }
+        .quick-queries {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-bottom: 10px;
+        }
+        .quick-query {
+            background: white;
+            border: 2px solid #667eea;
+            color: #667eea;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.2s;
+        }
+        .quick-query:hover {
+            background: #667eea;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🗄️ SQLite Database Admin</h1>
+            <p>View and query your remote SQLite database</p>
+        </div>
+
+        <div class="content">
+            <!-- Schema Section -->
+            <div class="section">
+                <h2>📋 Database Schema <span class="badge" id="table-count">Loading...</span></h2>
+                <button onclick="loadSchema()">🔄 Refresh Schema</button>
+                <div id="schema-results" class="results">
+                    <div class="loading">Loading schema...</div>
+                </div>
+            </div>
+
+            <!-- Query Section -->
+            <div class="section">
+                <h2>🔍 Execute Query</h2>
+                <div class="quick-queries">
+                    <div class="quick-query" onclick="setQuery('SELECT * FROM logs ORDER BY id DESC LIMIT 10')">📝 Recent Logs</div>
+                    <div class="quick-query" onclick="setQuery('SELECT COUNT(*) as total FROM logs')">🔢 Count Logs</div>
+                    <div class="quick-query" onclick="setQuery('SELECT * FROM logs WHERE created_at > datetime(\'now\', \'-1 hour\')')">🕐 Last Hour</div>
+                    <div class="quick-query" onclick="setQuery('SELECT * FROM sqlite_master')">🗂️ All Tables</div>
+                </div>
+                <textarea id="query-input" rows="4" placeholder="SELECT * FROM logs LIMIT 10">SELECT * FROM logs ORDER BY id DESC LIMIT 10</textarea>
+                <button onclick="executeQuery()">▶️ Execute Query</button>
+                <div id="query-results"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Get auth token from URL parameter (e.g., ?token=your-password)
+        const urlParams = new URLSearchParams(window.location.search);
+        const authToken = urlParams.get('token') || '';
+
+        if (!authToken) {
+            alert('⚠️ No authentication token provided!\n\nAdd ?token=YOUR_PASSWORD to the URL\n\nExample:\n/v1/db-admin?token=your-secret-password');
+        }
+
+        function getAuthHeaders() {
+            return {
+                'Authorization': 'Bearer ' + authToken
+            };
+        }
+
+        // Load schema on page load
+        document.addEventListener('DOMContentLoaded', () => {
+            loadSchema();
+        });
+
+        async function loadSchema() {
+            const resultsDiv = document.getElementById('schema-results');
+            resultsDiv.innerHTML = '<div class="loading">Loading schema...</div>';
+
+            try {
+                const response = await fetch('/v1/db-schema', {
+                    headers: getAuthHeaders()
+                });
+                const data = await response.json();
+
+                document.getElementById('table-count').textContent = data.count + ' tables';
+
+                if (data.tables.length === 0) {
+                    resultsDiv.innerHTML = '<p>No tables found in database.</p>';
+                    return;
+                }
+
+                let html = '';
+                data.tables.forEach(table => {
+                    html += '<div class="schema-item">';
+                    html += '<h3>📊 ' + table.name + '</h3>';
+                    html += '<div class="schema-sql">' + table.sql + '</div>';
+                    html += '</div>';
+                });
+
+                resultsDiv.innerHTML = html;
+            } catch (error) {
+                resultsDiv.innerHTML = '<div class="error">Error loading schema: ' + error.message + '</div>';
+            }
+        }
+
+        function setQuery(query) {
+            document.getElementById('query-input').value = query;
+        }
+
+        async function executeQuery() {
+            const query = document.getElementById('query-input').value.trim();
+            const resultsDiv = document.getElementById('query-results');
+
+            if (!query) {
+                resultsDiv.innerHTML = '<div class="error">Please enter a query</div>';
+                return;
+            }
+
+            resultsDiv.innerHTML = '<div class="loading">Executing query...</div>';
+
+            try {
+                const response = await fetch('/v1/db-query', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        ...getAuthHeaders()
+                    },
+                    body: JSON.stringify({ query: query })
+                });
+
+                if (!response.ok) {
+                    const text = await response.text();
+                    throw new Error(text);
+                }
+
+                const data = await response.json();
+
+                if (data.count === 0) {
+                    resultsDiv.innerHTML = '<div class="success">Query executed successfully. No rows returned.</div>';
+                    return;
+                }
+
+                let html = '<div class="success">✅ Returned ' + data.count + ' rows</div>';
+                html += '<table><thead><tr>';
+
+                data.columns.forEach(col => {
+                    html += '<th>' + col + '</th>';
+                });
+
+                html += '</tr></thead><tbody>';
+
+                data.rows.forEach(row => {
+                    html += '<tr>';
+                    data.columns.forEach(col => {
+                        let value = row[col];
+                        if (value === null) value = '<em>NULL</em>';
+                        html += '<td>' + value + '</td>';
+                    });
+                    html += '</tr>';
+                });
+
+                html += '</tbody></table>';
+                resultsDiv.innerHTML = html;
+
+            } catch (error) {
+                resultsDiv.innerHTML = '<div class="error">❌ Error: ' + error.message + '</div>';
+            }
+        }
+
+        // Allow Ctrl+Enter to execute query
+        document.getElementById('query-input').addEventListener('keydown', (e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                executeQuery();
+            }
+        });
+    </script>
+</body>
+</html>`
+
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprint(w, html)
+	}))
+
+	// SQLite download endpoint - download the entire database file
+	mux.HandleFunc("/v1/db-download", requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		// Optional: Add authentication here
+		// auth := r.Header.Get("Authorization")
+		// if auth != "Bearer your-secret-token" {
+		//     http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		//     return
+		// }
+
+		w.Header().Set("Content-Type", "application/x-sqlite3")
+		w.Header().Set("Content-Disposition", "attachment; filename=test.db")
+
+		http.ServeFile(w, r, "./test.db")
+	}))
+
+	// SQLite execute raw SQL endpoint (use with caution!)
+	mux.HandleFunc("/v1/db-query", requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		var req struct {
+			Query string `json:"query"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		// Only allow SELECT queries for safety
+		if !strings.HasPrefix(strings.ToUpper(strings.TrimSpace(req.Query)), "SELECT") {
+			http.Error(w, "Only SELECT queries are allowed", http.StatusBadRequest)
+			return
+		}
+
+		rows, err := db.Query(req.Query)
+		if err != nil {
+			slog.Error("Failed to execute query", "error", err)
+			http.Error(w, fmt.Sprintf("Query error: %v", err), http.StatusInternalServerError)
+			return
+		}
+		defer rows.Close()
+
+		columns, err := rows.Columns()
+		if err != nil {
+			http.Error(w, "Failed to get columns", http.StatusInternalServerError)
+			return
+		}
+
+		var results []map[string]interface{}
+		for rows.Next() {
+			values := make([]interface{}, len(columns))
+			valuePtrs := make([]interface{}, len(columns))
+			for i := range values {
+				valuePtrs[i] = &values[i]
+			}
+
+			if err := rows.Scan(valuePtrs...); err != nil {
+				continue
+			}
+
+			row := make(map[string]interface{})
+			for i, col := range columns {
+				var v interface{}
+				val := values[i]
+				b, ok := val.([]byte)
+				if ok {
+					v = string(b)
+				} else {
+					v = val
+				}
+				row[col] = v
+			}
+			results = append(results, row)
+		}
+
+		if results == nil {
+			results = []map[string]interface{}{}
+		}
+
+		response := map[string]interface{}{
+			"columns": columns,
+			"rows":    results,
+			"count":   len(results),
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(response)
+	}))
+
+	// SQLite schema endpoint - see all tables and structure
+	mux.HandleFunc("/v1/db-schema", requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		// Get all tables
+		rows, err := db.Query("SELECT name, sql FROM sqlite_master WHERE type='table' ORDER BY name")
+		if err != nil {
+			http.Error(w, "Failed to get schema", http.StatusInternalServerError)
+			return
+		}
+		defer rows.Close()
+
+		var tables []map[string]interface{}
+		for rows.Next() {
+			var name, sql string
+			if err := rows.Scan(&name, &sql); err != nil {
+				continue
+			}
+			tables = append(tables, map[string]interface{}{
+				"name": name,
+				"sql":  sql,
+			})
+		}
+
+		response := map[string]interface{}{
+			"tables": tables,
+			"count":  len(tables),
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(response)
+	}))
+
 	// SQLite test endpoint
 	mux.HandleFunc("/v1/db-test", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
