@@ -308,15 +308,18 @@ func main() {
 			},
 			API: APIInfo{
 				Endpoints: map[string]EndpointMeta{
-					"health":    {"/v2/health", "Service health check"},
-					"greeting":  {"/v2/greeting", "Personalized greeting service"},
-					"accounts":  {"/v2/accounts", "Account management endpoints"},
-					"debug":     {"/v1/debug", "Request debugging utility"},
-					"hello":     {"/v1/hello", "Simple hello endpoint"},
-					"liveness":  {"/v1/liveness", "Basic liveness check"},
-					"timeout":   {"/v1/timeout", "Timeout test endpoint"},
-					"protected": {"/v1/protected", "Auth protected endpoint"},
-					"openapi":   {"/openapi.yaml", "OpenAPI specification"},
+					"health":         {"/v2/health", "Service health check"},
+					"greeting":       {"/v2/greeting", "Personalized greeting service"},
+					"accounts":       {"/v2/accounts", "Account management endpoints"},
+					"debug":          {"/v1/debug", "Request debugging utility"},
+					"hello":          {"/v1/hello", "Simple hello endpoint"},
+					"liveness":       {"/v1/liveness", "Basic liveness check"},
+					"timeout":        {"/v1/timeout", "Timeout test endpoint"},
+					"protected":      {"/v1/protected", "Auth protected endpoint"},
+					"cpu-intensive":  {"/v1/cpu-intensive", "CPU load testing endpoint"},
+					"memory-intensive": {"/v1/memory-intensive", "Memory load testing endpoint"},
+					"stress":         {"/v1/stress", "Combined CPU and memory stress test"},
+					"openapi":        {"/openapi.yaml", "OpenAPI specification"},
 				},
 				Versions: []string{"v1", "v2"},
 			},
@@ -1083,6 +1086,270 @@ func main() {
 			"message": "random data logged to console",
 			"data":    randomData,
 		})
+	})
+
+	// CPU-intensive endpoint - for load testing
+	mux.HandleFunc("/v1/cpu-intensive", func(w http.ResponseWriter, r *http.Request) {
+		// Get duration from query parameter (default 5 seconds)
+		duration := 5 * time.Second
+		if d := r.URL.Query().Get("duration"); d != "" {
+			if parsed, err := time.ParseDuration(d); err == nil && parsed > 0 && parsed <= 60*time.Second {
+				duration = parsed
+			}
+		}
+
+		// Get number of goroutines (default 1)
+		goroutines := 1
+		if g := r.URL.Query().Get("goroutines"); g != "" {
+			if parsed, err := strconv.Atoi(g); err == nil && parsed >= 1 && parsed <= 100 {
+				goroutines = parsed
+			}
+		}
+
+		startTime := time.Now()
+		endTime := startTime.Add(duration)
+
+		var wg sync.WaitGroup
+		var totalOps int64
+
+		// Spawn multiple goroutines to consume CPU
+		for i := 0; i < goroutines; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				ops := 0
+				for time.Now().Before(endTime) {
+					// CPU-intensive operations
+					// Calculate prime numbers
+					n := 1000
+					for num := 2; num < n; num++ {
+						isPrime := true
+						for i := 2; i*i <= num; i++ {
+							if num%i == 0 {
+								isPrime = false
+								break
+							}
+						}
+						if isPrime {
+							ops++
+						}
+					}
+
+					// Mathematical operations
+					var result float64
+					for j := 0; j < 1000; j++ {
+						result += math.Sqrt(float64(j)) * math.Sin(float64(j))
+					}
+					ops++
+				}
+				// Atomic add to avoid race condition
+				for {
+					old := totalOps
+					if sync.CompareAndSwapInt64(&totalOps, old, old+int64(ops)) {
+						break
+					}
+				}
+			}()
+		}
+
+		wg.Wait()
+		elapsed := time.Since(startTime)
+
+		response := map[string]interface{}{
+			"message":          "CPU-intensive task completed",
+			"duration":         elapsed.String(),
+			"requested":        duration.String(),
+			"goroutines":       goroutines,
+			"total_operations": totalOps,
+			"timestamp":        time.Now().UTC(),
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(response)
+	})
+
+	// Memory-intensive endpoint - for load testing
+	mux.HandleFunc("/v1/memory-intensive", func(w http.ResponseWriter, r *http.Request) {
+		// Get memory size from query parameter in MB (default 100MB)
+		sizeMB := 100
+		if s := r.URL.Query().Get("size"); s != "" {
+			if parsed, err := strconv.Atoi(s); err == nil && parsed >= 1 && parsed <= 1000 {
+				sizeMB = parsed
+			}
+		}
+
+		// Get duration to hold memory (default 5 seconds)
+		duration := 5 * time.Second
+		if d := r.URL.Query().Get("duration"); d != "" {
+			if parsed, err := time.ParseDuration(d); err == nil && parsed > 0 && parsed <= 60*time.Second {
+				duration = parsed
+			}
+		}
+
+		startTime := time.Now()
+
+		// Allocate memory
+		sizeBytes := sizeMB * 1024 * 1024
+		data := make([]byte, sizeBytes)
+
+		// Fill with random data to prevent optimization
+		for i := range data {
+			data[i] = byte(i % 256)
+		}
+
+		// Create some complex data structures
+		type largeStruct struct {
+			ID       string
+			Data     []byte
+			Metadata map[string]interface{}
+		}
+
+		structures := make([]largeStruct, 1000)
+		for i := range structures {
+			structures[i] = largeStruct{
+				ID:   fmt.Sprintf("struct_%d", i),
+				Data: make([]byte, 1024),
+				Metadata: map[string]interface{}{
+					"index":     i,
+					"timestamp": time.Now(),
+					"random":    mrand.Float64(),
+				},
+			}
+		}
+
+		// Hold the memory for the specified duration
+		time.Sleep(duration)
+
+		// Calculate checksum to prevent compiler optimization
+		var checksum int64
+		for _, b := range data {
+			checksum += int64(b)
+		}
+
+		elapsed := time.Since(startTime)
+
+		response := map[string]interface{}{
+			"message":        "Memory-intensive task completed",
+			"allocated_mb":   sizeMB,
+			"allocated_bytes": sizeBytes,
+			"structures":     len(structures),
+			"duration":       elapsed.String(),
+			"checksum":       checksum,
+			"timestamp":      time.Now().UTC(),
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(response)
+
+		// Data will be garbage collected after this point
+	})
+
+	// Combined stress test endpoint
+	mux.HandleFunc("/v1/stress", func(w http.ResponseWriter, r *http.Request) {
+		// Get parameters
+		cpuDuration := 3 * time.Second
+		if d := r.URL.Query().Get("cpu_duration"); d != "" {
+			if parsed, err := time.ParseDuration(d); err == nil && parsed > 0 && parsed <= 60*time.Second {
+				cpuDuration = parsed
+			}
+		}
+
+		memoryMB := 50
+		if s := r.URL.Query().Get("memory_mb"); s != "" {
+			if parsed, err := strconv.Atoi(s); err == nil && parsed >= 1 && parsed <= 1000 {
+				memoryMB = parsed
+			}
+		}
+
+		goroutines := 2
+		if g := r.URL.Query().Get("goroutines"); g != "" {
+			if parsed, err := strconv.Atoi(g); err == nil && parsed >= 1 && parsed <= 100 {
+				goroutines = parsed
+			}
+		}
+
+		startTime := time.Now()
+
+		// Allocate memory
+		memoryData := make([][]byte, goroutines)
+		for i := range memoryData {
+			size := (memoryMB * 1024 * 1024) / goroutines
+			memoryData[i] = make([]byte, size)
+			for j := range memoryData[i] {
+				memoryData[i][j] = byte(j % 256)
+			}
+		}
+
+		// CPU stress
+		var wg sync.WaitGroup
+		endTime := time.Now().Add(cpuDuration)
+		var totalOps int64
+
+		for i := 0; i < goroutines; i++ {
+			wg.Add(1)
+			go func(index int) {
+				defer wg.Done()
+				ops := 0
+				localData := memoryData[index]
+
+				for time.Now().Before(endTime) {
+					// Mix of CPU and memory operations
+					// Prime calculation
+					for num := 2; num < 500; num++ {
+						isPrime := true
+						for i := 2; i*i <= num; i++ {
+							if num%i == 0 {
+								isPrime = false
+								break
+							}
+						}
+						if isPrime {
+							ops++
+						}
+					}
+
+					// Memory access pattern
+					var sum int64
+					for j := 0; j < len(localData); j += 1000 {
+						sum += int64(localData[j])
+					}
+					ops++
+
+					// Mathematical operations
+					var result float64
+					for k := 0; k < 500; k++ {
+						result += math.Sqrt(float64(k)) * math.Cos(float64(k))
+					}
+					ops++
+				}
+
+				for {
+					old := totalOps
+					if sync.CompareAndSwapInt64(&totalOps, old, old+int64(ops)) {
+						break
+					}
+				}
+			}(i)
+		}
+
+		wg.Wait()
+		elapsed := time.Since(startTime)
+
+		response := map[string]interface{}{
+			"message":          "Combined stress test completed",
+			"elapsed":          elapsed.String(),
+			"cpu_duration":     cpuDuration.String(),
+			"memory_mb":        memoryMB,
+			"goroutines":       goroutines,
+			"total_operations": totalOps,
+			"timestamp":        time.Now().UTC(),
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(response)
 	})
 
 	mux.HandleFunc("/v1/protected", func(w http.ResponseWriter, r *http.Request) {
