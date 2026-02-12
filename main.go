@@ -320,6 +320,7 @@ func main() {
 					"cpu-intensive":    {"/v1/cpu-intensive", "CPU load testing endpoint"},
 					"memory-intensive": {"/v1/memory-intensive", "Memory load testing endpoint"},
 					"stress":           {"/v1/stress", "Combined CPU and memory stress test"},
+					"oom":              {"/v1/oom", "Trigger Out Of Memory (OOM) error"},
 					"openapi":          {"/openapi.yaml", "OpenAPI specification"},
 				},
 				Versions: []string{"v1", "v2"},
@@ -1238,6 +1239,113 @@ func main() {
 		_ = json.NewEncoder(w).Encode(response)
 
 		// Data will be garbage collected after this point
+	})
+
+	// OOM (Out of Memory) endpoint - intentionally triggers OOM
+	mux.HandleFunc("/v1/oom", func(w http.ResponseWriter, r *http.Request) {
+		// Get memory allocation strategy
+		strategy := r.URL.Query().Get("strategy")
+		if strategy == "" {
+			strategy = "gradual" // gradual, instant, or leak
+		}
+
+		// Get chunk size in MB (default 50MB)
+		chunkMB := 50
+		if s := r.URL.Query().Get("chunk_mb"); s != "" {
+			if parsed, err := strconv.Atoi(s); err == nil && parsed >= 1 && parsed <= 500 {
+				chunkMB = parsed
+			}
+		}
+
+		slog.Warn("OOM endpoint triggered",
+			"strategy", strategy,
+			"chunk_mb", chunkMB,
+			"remote_addr", r.RemoteAddr,
+		)
+
+		switch strategy {
+		case "instant":
+			// Try to allocate a huge amount of memory all at once
+			// This will likely trigger OOM immediately
+			slog.Info("Attempting instant OOM with 10GB allocation")
+			data := make([]byte, 10*1024*1024*1024) // 10GB
+			// Fill it to prevent lazy allocation
+			for i := range data {
+				data[i] = byte(i % 256)
+			}
+			// This line will likely never be reached
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"message": "Somehow survived 10GB allocation",
+				"size":    len(data),
+			})
+
+		case "leak":
+			// Memory leak simulation - allocate and never release
+			// Store in a global variable to prevent GC
+			leakedMemory := make([][]byte, 0)
+
+			// Allocate chunks until we OOM
+			for i := 0; i < 10000; i++ {
+				chunk := make([]byte, chunkMB*1024*1024)
+				// Fill with data
+				for j := range chunk {
+					chunk[j] = byte(j % 256)
+				}
+				leakedMemory = append(leakedMemory, chunk)
+
+				if i%10 == 0 {
+					slog.Info("Memory leak progress",
+						"iteration", i,
+						"allocated_mb", i*chunkMB,
+						"chunks", len(leakedMemory),
+					)
+				}
+			}
+
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"message": "Memory leak completed without OOM",
+				"chunks":  len(leakedMemory),
+			})
+
+		case "gradual":
+			fallthrough
+		default:
+			// Gradually allocate memory in chunks until OOM
+			var allocatedChunks [][]byte
+			chunkSize := chunkMB * 1024 * 1024
+			totalAllocated := 0
+
+			for i := 0; i < 10000; i++ {
+				chunk := make([]byte, chunkSize)
+				// Fill with data to ensure actual allocation
+				for j := range chunk {
+					chunk[j] = byte((i + j) % 256)
+				}
+				allocatedChunks = append(allocatedChunks, chunk)
+				totalAllocated += chunkSize
+
+				if i%10 == 0 {
+					slog.Info("Gradual OOM progress",
+						"iteration", i,
+						"allocated_mb", totalAllocated/(1024*1024),
+						"chunks", len(allocatedChunks),
+					)
+				}
+
+				// Small delay to see gradual memory increase
+				time.Sleep(100 * time.Millisecond)
+			}
+
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"message":       "Gradual allocation completed without OOM",
+				"chunks":        len(allocatedChunks),
+				"total_mb":      totalAllocated / (1024 * 1024),
+				"total_bytes":   totalAllocated,
+			})
+		}
 	})
 
 	// Combined stress test endpoint
