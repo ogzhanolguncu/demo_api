@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -16,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
 type HelloResponse struct {
@@ -208,6 +211,28 @@ func respondWithValidationError(w http.ResponseWriter, message string, details [
 	})
 }
 
+func initDB() (*sql.DB, error) {
+	db, err := sql.Open("sqlite3", "./test.db")
+	if err != nil {
+		return nil, err
+	}
+
+	// Create a simple test table
+	createTableSQL := `CREATE TABLE IF NOT EXISTS logs (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		message TEXT NOT NULL,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);`
+
+	_, err = db.Exec(createTableSQL)
+	if err != nil {
+		return nil, err
+	}
+
+	slog.Info("SQLite database initialized", "file", "./test.db")
+	return db, nil
+}
+
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
@@ -216,6 +241,33 @@ func main() {
 	if port == "" {
 		port = "8080"
 	}
+
+	// Load environment variables for testing
+	unkeyRootKey := os.Getenv("UNKEY_ROOT_KEY")
+	apiKey := os.Getenv("API_KEY")
+	databaseURL := os.Getenv("DATABASE_URL")
+	debugMode := os.Getenv("DEBUG_MODE")
+	environment := os.Getenv("ENVIRONMENT")
+	redisURL := os.Getenv("REDIS_URL")
+	secretToken := os.Getenv("SECRET_TOKEN")
+
+	slog.Info("Environment variables loaded",
+		"unkey_root_key_set", unkeyRootKey != "",
+		"api_key_set", apiKey != "",
+		"database_url_set", databaseURL != "",
+		"debug_mode", debugMode,
+		"environment", environment,
+		"redis_url_set", redisURL != "",
+		"secret_token_set", secretToken != "",
+	)
+
+	// Initialize SQLite database
+	db, err := initDB()
+	if err != nil {
+		slog.Error("Failed to initialize database", "error", err)
+		os.Exit(1)
+	}
+	defer db.Close()
 
 	mux := http.NewServeMux()
 
@@ -305,6 +357,78 @@ func main() {
 		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprint(w, os.Environ())
+	})
+
+	// SQLite test endpoint
+	mux.HandleFunc("/v1/db-test", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			// Insert a log entry
+			var req struct {
+				Message string `json:"message"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "Invalid request body", http.StatusBadRequest)
+				return
+			}
+
+			result, err := db.Exec("INSERT INTO logs (message) VALUES (?)", req.Message)
+			if err != nil {
+				slog.Error("Failed to insert log", "error", err)
+				http.Error(w, "Database error", http.StatusInternalServerError)
+				return
+			}
+
+			id, _ := result.LastInsertId()
+			response := map[string]interface{}{
+				"id":      id,
+				"message": "Log entry created",
+			}
+
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(response)
+
+		case http.MethodGet:
+			// Retrieve all logs
+			rows, err := db.Query("SELECT id, message, created_at FROM logs ORDER BY id DESC LIMIT 10")
+			if err != nil {
+				slog.Error("Failed to query logs", "error", err)
+				http.Error(w, "Database error", http.StatusInternalServerError)
+				return
+			}
+			defer rows.Close()
+
+			var logs []map[string]interface{}
+			for rows.Next() {
+				var id int
+				var message, createdAt string
+				if err := rows.Scan(&id, &message, &createdAt); err != nil {
+					continue
+				}
+				logs = append(logs, map[string]interface{}{
+					"id":         id,
+					"message":    message,
+					"created_at": createdAt,
+				})
+			}
+
+			if logs == nil {
+				logs = []map[string]interface{}{}
+			}
+
+			response := map[string]interface{}{
+				"count": len(logs),
+				"logs":  logs,
+			}
+
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(response)
+
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
 	})
 
 	mux.HandleFunc("/panic", func(w http.ResponseWriter, r *http.Request) {
