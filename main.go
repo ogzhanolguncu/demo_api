@@ -264,7 +264,7 @@ func main() {
 	// Initialize SQLite database
 	db, err := initDB()
 	if err != nil {
-		slog.Error("Failed to initialize database", "error", err)
+		slog.Error("Failed to initialize databasee", "error", err)
 		os.Exit(1)
 	}
 	defer db.Close()
