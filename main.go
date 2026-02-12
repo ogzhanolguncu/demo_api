@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -308,18 +309,18 @@ func main() {
 			},
 			API: APIInfo{
 				Endpoints: map[string]EndpointMeta{
-					"health":         {"/v2/health", "Service health check"},
-					"greeting":       {"/v2/greeting", "Personalized greeting service"},
-					"accounts":       {"/v2/accounts", "Account management endpoints"},
-					"debug":          {"/v1/debug", "Request debugging utility"},
-					"hello":          {"/v1/hello", "Simple hello endpoint"},
-					"liveness":       {"/v1/liveness", "Basic liveness check"},
-					"timeout":        {"/v1/timeout", "Timeout test endpoint"},
-					"protected":      {"/v1/protected", "Auth protected endpoint"},
-					"cpu-intensive":  {"/v1/cpu-intensive", "CPU load testing endpoint"},
+					"health":           {"/v2/health", "Service health check"},
+					"greeting":         {"/v2/greeting", "Personalized greeting service"},
+					"accounts":         {"/v2/accounts", "Account management endpoints"},
+					"debug":            {"/v1/debug", "Request debugging utility"},
+					"hello":            {"/v1/hello", "Simple hello endpoint"},
+					"liveness":         {"/v1/liveness", "Basic liveness check"},
+					"timeout":          {"/v1/timeout", "Timeout test endpoint"},
+					"protected":        {"/v1/protected", "Auth protected endpoint"},
+					"cpu-intensive":    {"/v1/cpu-intensive", "CPU load testing endpoint"},
 					"memory-intensive": {"/v1/memory-intensive", "Memory load testing endpoint"},
-					"stress":         {"/v1/stress", "Combined CPU and memory stress test"},
-					"openapi":        {"/openapi.yaml", "OpenAPI specification"},
+					"stress":           {"/v1/stress", "Combined CPU and memory stress test"},
+					"openapi":          {"/openapi.yaml", "OpenAPI specification"},
 				},
 				Versions: []string{"v1", "v2"},
 			},
@@ -1114,9 +1115,7 @@ func main() {
 
 		// Spawn multiple goroutines to consume CPU
 		for i := 0; i < goroutines; i++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				ops := 0
 				for time.Now().Before(endTime) {
 					// CPU-intensive operations
@@ -1143,13 +1142,8 @@ func main() {
 					ops++
 				}
 				// Atomic add to avoid race condition
-				for {
-					old := totalOps
-					if sync.CompareAndSwapInt64(&totalOps, old, old+int64(ops)) {
-						break
-					}
-				}
-			}()
+				atomic.AddInt64(&totalOps, int64(ops))
+			})
 		}
 
 		wg.Wait()
@@ -1230,13 +1224,13 @@ func main() {
 		elapsed := time.Since(startTime)
 
 		response := map[string]interface{}{
-			"message":        "Memory-intensive task completed",
-			"allocated_mb":   sizeMB,
+			"message":         "Memory-intensive task completed",
+			"allocated_mb":    sizeMB,
 			"allocated_bytes": sizeBytes,
-			"structures":     len(structures),
-			"duration":       elapsed.String(),
-			"checksum":       checksum,
-			"timestamp":      time.Now().UTC(),
+			"structures":      len(structures),
+			"duration":        elapsed.String(),
+			"checksum":        checksum,
+			"timestamp":       time.Now().UTC(),
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -1325,12 +1319,7 @@ func main() {
 					ops++
 				}
 
-				for {
-					old := totalOps
-					if sync.CompareAndSwapInt64(&totalOps, old, old+int64(ops)) {
-						break
-					}
-				}
+				atomic.AddInt64(&totalOps, int64(ops))
 			}(i)
 		}
 
