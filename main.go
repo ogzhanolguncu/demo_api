@@ -160,6 +160,28 @@ type RandomData struct {
 	Hash        string     `json:"session_hash"`
 }
 
+type SystemMetrics struct {
+	Memory    MemoryMetrics `json:"memory"`
+	Runtime   RuntimeInfo   `json:"runtime"`
+	Timestamp time.Time     `json:"timestamp"`
+}
+
+type MemoryMetrics struct {
+	AllocBytes      uint64  `json:"alloc_bytes"`
+	AllocMB         float64 `json:"alloc_mb"`
+	TotalAllocBytes uint64  `json:"total_alloc_bytes"`
+	SysBytes        uint64  `json:"sys_bytes"`
+	SysMB           float64 `json:"sys_mb"`
+	HeapAllocBytes  uint64  `json:"heap_alloc_bytes"`
+	HeapSysBytes    uint64  `json:"heap_sys_bytes"`
+}
+
+type RuntimeInfo struct {
+	NumGoroutine int    `json:"num_goroutine"`
+	NumGC        uint32 `json:"num_gc"`
+	GoVersion    string `json:"go_version"`
+}
+
 var (
 	serverStartTime = time.Now()
 	wisdomQuotes    = []string{
@@ -233,6 +255,29 @@ func initDB() (*sql.DB, error) {
 	return db, nil
 }
 
+func getSystemMetrics() SystemMetrics {
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+
+	return SystemMetrics{
+		Memory: MemoryMetrics{
+			AllocBytes:      m.Alloc,
+			AllocMB:         float64(m.Alloc) / 1024 / 1024,
+			TotalAllocBytes: m.TotalAlloc,
+			SysBytes:        m.Sys,
+			SysMB:           float64(m.Sys) / 1024 / 1024,
+			HeapAllocBytes:  m.HeapAlloc,
+			HeapSysBytes:    m.HeapSys,
+		},
+		Runtime: RuntimeInfo{
+			NumGoroutine: runtime.NumGoroutine(),
+			NumGC:        m.NumGC,
+			GoVersion:    runtime.Version(),
+		},
+		Timestamp: time.Now().UTC(),
+	}
+}
+
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
@@ -243,7 +288,7 @@ func main() {
 	}
 
 	// Load environment variables for testing
-	unkeyRootKey := os.Getenv("UNKEY_ROOT_KEY")
+	rootApiKey := os.Getenv("ROOT_API_KEY")
 	apiKey := os.Getenv("API_KEY")
 	databaseURL := os.Getenv("DATABASE_URL")
 	debugMode := os.Getenv("DEBUG_MODE")
@@ -252,7 +297,7 @@ func main() {
 	secretToken := os.Getenv("SECRET_TOKEN")
 
 	slog.Info("Environment variables loaded",
-		"unkey_root_key_set", unkeyRootKey != "",
+		"root_api_key_set", rootApiKey != "",
 		"api_key_set", apiKey != "",
 		"database_url_set", databaseURL != "",
 		"debug_mode", debugMode,
@@ -308,15 +353,16 @@ func main() {
 			},
 			API: APIInfo{
 				Endpoints: map[string]EndpointMeta{
-					"health":    {"/v2/health", "Service health check"},
-					"greeting":  {"/v2/greeting", "Personalized greeting service"},
-					"accounts":  {"/v2/accounts", "Account management endpoints"},
-					"debug":     {"/v1/debug", "Request debugging utility"},
-					"hello":     {"/v1/hello", "Simple hello endpoint"},
-					"liveness":  {"/v1/liveness", "Basic liveness check"},
-					"timeout":   {"/v1/timeout", "Timeout test endpoint"},
-					"protected": {"/v1/protected", "Auth protected endpoint"},
-					"openapi":   {"/openapi.yaml", "OpenAPI specification"},
+					"health":         {"/v2/health", "Service health check"},
+					"system-metrics": {"/v2/system-metrics", "Real-time system metrics (RAM, CPU, runtime)"},
+					"greeting":       {"/v2/greeting", "Personalized greeting service"},
+					"accounts":       {"/v2/accounts", "Account management endpoints"},
+					"debug":          {"/v1/debug", "Request debugging utility"},
+					"hello":          {"/v1/hello", "Simple hello endpoint"},
+					"liveness":       {"/v1/liveness", "Basic liveness check"},
+					"timeout":        {"/v1/timeout", "Timeout test endpoint"},
+					"protected":      {"/v1/protected", "Auth protected endpoint"},
+					"openapi":        {"/openapi.yaml", "OpenAPI specification"},
 				},
 				Versions: []string{"v1", "v2"},
 			},
@@ -1113,6 +1159,20 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(response)
+	})
+
+	// System metrics endpoint
+	mux.HandleFunc("/v2/system-metrics", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			respondWithError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed")
+			return
+		}
+
+		metrics := getSystemMetrics()
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(metrics)
 	})
 
 	// Greeting endpoint

@@ -22,6 +22,6 @@ WORKDIR /root/
 
 COPY --from=builder /app/main .
 
-ENV PORT 8080
+ENV PORT 3131
 
 CMD ["./main"]
