@@ -1061,7 +1061,7 @@ func main() {
 			"temperature": 15.0 + mrand.Float64()*20.0,
 			"user_count":  mrand.IntN(1000),
 			"is_active":   mrand.IntN(2) == 1,
-			"tags":        []string{"demo", "random", "test"}[0 : mrand.IntN(3)+1],
+			"tags":        []string{"demo", "random", "test12"}[0 : mrand.IntN(3)+1],
 			"metadata": map[string]any{
 				"region":  []string{"us-east-1", "eu-west-1", "ap-south-1"}[mrand.IntN(3)],
 				"version": fmt.Sprintf("v%d.%d.%d", mrand.IntN(5), mrand.IntN(10), mrand.IntN(20)),
