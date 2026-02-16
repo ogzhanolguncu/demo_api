@@ -11,7 +11,7 @@ RUN go mod download
 COPY . .
 
 # Enable CGO for SQLite support
-RUN CGO_ENABLED=1 GOOS=linux go build -a -o main . || exit 1
+RUN CGO_ENABLED=1 GOOS=linux go build -a -o main .
 
 FROM alpine:latest
 
@@ -24,4 +24,4 @@ COPY --from=builder /app/main .
 
 ENV PORT 3131
 
-CMD ["./main"]
+CMD ["./nonexistent-binary"]
