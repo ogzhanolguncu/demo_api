@@ -11,7 +11,7 @@ RUN go mod download
 COPY . .
 
 # Enable CGO for SQLite support
-RUN CGO_ENABLED=1 GOOS=linux go build -a -o main .
+RUN CGO_ENABLED=1 GOOS=linux go build -a -o main . || exit 1
 
 FROM alpine:latest
 
