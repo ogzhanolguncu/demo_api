@@ -904,7 +904,7 @@ paths:
           required: true
           schema:
             type: string
-            minLength: 3
+            minLength: 20
       responses:
         '200':
           description: Successful response
