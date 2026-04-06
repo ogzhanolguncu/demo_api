@@ -11,10 +11,12 @@ import (
 	mrand "math/rand/v2"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -220,7 +222,6 @@ func main() {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		slog.Info("chronark was here")
 		// Without this browsers automatically request /favicon.ico on every page load
 		if r.URL.Path == "/favicon" {
 			return
@@ -457,6 +458,203 @@ func main() {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
+	})
+
+	// Ephemeral disk test endpoints
+	const scratchDir = "/scratch"
+
+	mux.HandleFunc("/v1/disk/write", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			respondWithError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Use POST")
+			return
+		}
+
+		filename := r.URL.Query().Get("filename")
+		if filename == "" {
+			filename = "test.txt"
+		}
+		// Prevent path traversal
+		filename = filepath.Base(filename)
+
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			respondWithError(w, http.StatusInternalServerError, "READ_ERROR", "Failed to read request body")
+			return
+		}
+		defer func() { _ = r.Body.Close() }()
+
+		if len(body) == 0 {
+			body = []byte("hello from ephemeral disk test")
+		}
+
+		path := filepath.Join(scratchDir, filename)
+		if err := os.WriteFile(path, body, 0o644); err != nil {
+			respondWithError(w, http.StatusInternalServerError, "WRITE_ERROR", fmt.Sprintf("Failed to write to %s: %v", path, err))
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"message":  "file written",
+			"path":     path,
+			"size":     len(body),
+			"filename": filename,
+		})
+	})
+
+	mux.HandleFunc("/v1/disk/read", func(w http.ResponseWriter, r *http.Request) {
+		filename := r.URL.Query().Get("filename")
+		if filename == "" {
+			filename = "test.txt"
+		}
+		filename = filepath.Base(filename)
+
+		path := filepath.Join(scratchDir, filename)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			respondWithError(w, http.StatusNotFound, "READ_ERROR", fmt.Sprintf("Failed to read %s: %v", path, err))
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"path":    path,
+			"size":    len(data),
+			"content": string(data),
+		})
+	})
+
+	mux.HandleFunc("/v1/disk/ls", func(w http.ResponseWriter, r *http.Request) {
+		entries, err := os.ReadDir(scratchDir)
+		if err != nil {
+			respondWithError(w, http.StatusInternalServerError, "LS_ERROR", fmt.Sprintf("Failed to list %s: %v", scratchDir, err))
+			return
+		}
+
+		type fileEntry struct {
+			Name string `json:"name"`
+			Size int64  `json:"size"`
+			Dir  bool   `json:"is_dir"`
+		}
+
+		files := make([]fileEntry, 0, len(entries))
+		for _, e := range entries {
+			info, err := e.Info()
+			if err != nil {
+				continue
+			}
+			files = append(files, fileEntry{
+				Name: e.Name(),
+				Size: info.Size(),
+				Dir:  e.IsDir(),
+			})
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"path":  scratchDir,
+			"files": files,
+			"count": len(files),
+		})
+	})
+
+	mux.HandleFunc("/v1/disk/info", func(w http.ResponseWriter, r *http.Request) {
+		var stat syscall.Statfs_t
+		if err := syscall.Statfs(scratchDir, &stat); err != nil {
+			respondWithError(w, http.StatusInternalServerError, "STAT_ERROR", fmt.Sprintf("Failed to stat %s: %v", scratchDir, err))
+			return
+		}
+
+		totalBytes := stat.Blocks * uint64(stat.Bsize)
+		freeBytes := stat.Bfree * uint64(stat.Bsize)
+		usedBytes := totalBytes - freeBytes
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"path":      scratchDir,
+			"total_mib": totalBytes / (1024 * 1024),
+			"used_mib":  usedBytes / (1024 * 1024),
+			"free_mib":  freeBytes / (1024 * 1024),
+			"total_bytes": totalBytes,
+			"used_bytes":  usedBytes,
+			"free_bytes":  freeBytes,
+		})
+	})
+
+	mux.HandleFunc("/v1/disk/stress", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			respondWithError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Use POST")
+			return
+		}
+
+		sizeMB := 10
+		if s := r.URL.Query().Get("size_mb"); s != "" {
+			if parsed, err := strconv.Atoi(s); err == nil && parsed > 0 && parsed <= 1024 {
+				sizeMB = parsed
+			}
+		}
+
+		path := filepath.Join(scratchDir, "stress_test.bin")
+		f, err := os.Create(path)
+		if err != nil {
+			respondWithError(w, http.StatusInternalServerError, "CREATE_ERROR", fmt.Sprintf("Failed to create stress file: %v", err))
+			return
+		}
+
+		chunk := make([]byte, 1024*1024) // 1MB
+		_, _ = rand.Read(chunk)
+
+		var written int64
+		for i := 0; i < sizeMB; i++ {
+			n, err := f.Write(chunk)
+			if err != nil {
+				_ = f.Close()
+				respondWithError(w, http.StatusInternalServerError, "WRITE_ERROR", fmt.Sprintf("Write failed after %d MB: %v", i, err))
+				return
+			}
+			written += int64(n)
+		}
+		_ = f.Close()
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"message":    fmt.Sprintf("wrote %d MB to disk", sizeMB),
+			"path":       path,
+			"written_mb": sizeMB,
+			"written_bytes": written,
+		})
+	})
+
+	mux.HandleFunc("/v1/disk/delete", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			respondWithError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Use DELETE")
+			return
+		}
+
+		filename := r.URL.Query().Get("filename")
+		if filename == "" {
+			respondWithError(w, http.StatusBadRequest, "MISSING_PARAM", "filename query param required")
+			return
+		}
+		filename = filepath.Base(filename)
+
+		path := filepath.Join(scratchDir, filename)
+		if err := os.Remove(path); err != nil {
+			respondWithError(w, http.StatusNotFound, "DELETE_ERROR", fmt.Sprintf("Failed to delete %s: %v", path, err))
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"message": "file deleted",
+			"path":    path,
+		})
 	})
 
 	// V2 API Endpoints
@@ -843,19 +1041,6 @@ func main() {
 		}
 	})
 
-	// Binary response endpoint - returns raw bytes for testing content-type rendering
-	mux.HandleFunc("/v1/binary", func(w http.ResponseWriter, r *http.Request) {
-		ct := r.URL.Query().Get("content_type")
-		if ct == "" {
-			ct = "application/octet-stream"
-		}
-		w.Header().Set("Content-Type", ct)
-		w.WriteHeader(http.StatusOK)
-		data := make([]byte, 64)
-		_, _ = rand.Read(data)
-		_, _ = w.Write(data)
-	})
-
 	// OpenAPI spec endpoint - VERSION 2 (Breaking Changes)
 	mux.HandleFunc("/openapi.yaml", func(w http.ResponseWriter, r *http.Request) {
 		spec := `openapi: 3.1.0
@@ -904,7 +1089,7 @@ paths:
           required: true
           schema:
             type: string
-            minLength: 20
+            minLength: 3
       responses:
         '200':
           description: Successful response
