@@ -461,7 +461,7 @@ func main() {
 	})
 
 	// Ephemeral disk test endpoints
-	const scratchDir = "/scratch"
+	scratchDir := "/scratch"
 
 	mux.HandleFunc("/v1/disk/write", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -654,6 +654,224 @@ func main() {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"message": "file deleted",
 			"path":    path,
+		})
+	})
+
+	// Hardcoded //etc test — proves volume overlay on /etc
+	mux.HandleFunc("/v1/disk/etc/write", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			respondWithError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Use POST")
+			return
+		}
+
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			respondWithError(w, http.StatusInternalServerError, "READ_ERROR", "Failed to read body")
+			return
+		}
+		defer func() { _ = r.Body.Close() }()
+
+		if len(body) == 0 {
+			body = []byte("written to //etc via ephemeral volume")
+		}
+
+		filename := r.URL.Query().Get("filename")
+		if filename == "" {
+			filename = "proof.txt"
+		}
+		filename = filepath.Base(filename)
+
+		path := filepath.Join("//etc", filename)
+		if err := os.WriteFile(path, body, 0o644); err != nil {
+			respondWithError(w, http.StatusInternalServerError, "WRITE_ERROR", fmt.Sprintf("Failed to write %s: %v", path, err))
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"message": "file written to //etc",
+			"path":    path,
+			"size":    len(body),
+		})
+	})
+
+	mux.HandleFunc("/v1/disk/etc/read", func(w http.ResponseWriter, r *http.Request) {
+		filename := r.URL.Query().Get("filename")
+		if filename == "" {
+			filename = "proof.txt"
+		}
+		filename = filepath.Base(filename)
+
+		path := filepath.Join("//etc", filename)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			respondWithError(w, http.StatusNotFound, "READ_ERROR", fmt.Sprintf("Failed to read %s: %v", path, err))
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"path":    path,
+			"size":    len(data),
+			"content": string(data),
+		})
+	})
+
+	mux.HandleFunc("/v1/disk/etc/ls", func(w http.ResponseWriter, r *http.Request) {
+		entries, err := os.ReadDir("//etc")
+		if err != nil {
+			respondWithError(w, http.StatusInternalServerError, "LS_ERROR", fmt.Sprintf("Failed to list //etc: %v", err))
+			return
+		}
+
+		type fileEntry struct {
+			Name string `json:"name"`
+			Size int64  `json:"size"`
+			Dir  bool   `json:"is_dir"`
+		}
+
+		files := make([]fileEntry, 0, len(entries))
+		for _, e := range entries {
+			info, err := e.Info()
+			if err != nil {
+				continue
+			}
+			files = append(files, fileEntry{
+				Name: e.Name(),
+				Size: info.Size(),
+				Dir:  e.IsDir(),
+			})
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"path":  "//etc",
+			"files": files,
+			"count": len(files),
+		})
+	})
+
+	// Arbitrary directory write — write to any path in the container
+	mux.HandleFunc("/v1/disk/arbitrary/write", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			respondWithError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Use POST")
+			return
+		}
+
+		dir := r.URL.Query().Get("dir")
+		if dir == "" {
+			respondWithError(w, http.StatusBadRequest, "MISSING_PARAM", "dir query param required (e.g. /tmp, /var)")
+			return
+		}
+
+		filename := r.URL.Query().Get("filename")
+		if filename == "" {
+			filename = "test.txt"
+		}
+		filename = filepath.Base(filename)
+
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			respondWithError(w, http.StatusInternalServerError, "READ_ERROR", "Failed to read body")
+			return
+		}
+		defer func() { _ = r.Body.Close() }()
+
+		if len(body) == 0 {
+			body = []byte(fmt.Sprintf("arbitrary write to %s", dir))
+		}
+
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			respondWithError(w, http.StatusInternalServerError, "MKDIR_ERROR", fmt.Sprintf("Failed to create dir %s: %v", dir, err))
+			return
+		}
+
+		path := filepath.Join(dir, filename)
+		if err := os.WriteFile(path, body, 0o644); err != nil {
+			respondWithError(w, http.StatusInternalServerError, "WRITE_ERROR", fmt.Sprintf("Failed to write %s: %v", path, err))
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"message": "file written",
+			"dir":     dir,
+			"path":    path,
+			"size":    len(body),
+		})
+	})
+
+	mux.HandleFunc("/v1/disk/arbitrary/read", func(w http.ResponseWriter, r *http.Request) {
+		dir := r.URL.Query().Get("dir")
+		if dir == "" {
+			respondWithError(w, http.StatusBadRequest, "MISSING_PARAM", "dir query param required")
+			return
+		}
+
+		filename := r.URL.Query().Get("filename")
+		if filename == "" {
+			filename = "test.txt"
+		}
+		filename = filepath.Base(filename)
+
+		path := filepath.Join(dir, filename)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			respondWithError(w, http.StatusNotFound, "READ_ERROR", fmt.Sprintf("Failed to read %s: %v", path, err))
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"path":    path,
+			"size":    len(data),
+			"content": string(data),
+		})
+	})
+
+	mux.HandleFunc("/v1/disk/arbitrary/ls", func(w http.ResponseWriter, r *http.Request) {
+		dir := r.URL.Query().Get("dir")
+		if dir == "" {
+			respondWithError(w, http.StatusBadRequest, "MISSING_PARAM", "dir query param required")
+			return
+		}
+
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			respondWithError(w, http.StatusInternalServerError, "LS_ERROR", fmt.Sprintf("Failed to list %s: %v", dir, err))
+			return
+		}
+
+		type fileEntry struct {
+			Name string `json:"name"`
+			Size int64  `json:"size"`
+			Dir  bool   `json:"is_dir"`
+		}
+
+		files := make([]fileEntry, 0, len(entries))
+		for _, e := range entries {
+			info, err := e.Info()
+			if err != nil {
+				continue
+			}
+			files = append(files, fileEntry{
+				Name: e.Name(),
+				Size: info.Size(),
+				Dir:  e.IsDir(),
+			})
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"path":  dir,
+			"files": files,
+			"count": len(files),
 		})
 	})
 
