@@ -302,6 +302,14 @@ func main() {
 		_, _ = fmt.Fprint(w, "OK")
 	})
 
+	 mux.HandleFunc("/redirect", func(w http.ResponseWriter, r *http.Request) {
+      http.Redirect(w, r, "/api/v1", http.StatusFound) // 302
+  })
+
+  mux.HandleFunc("/moved", func(w http.ResponseWriter, r *http.Request) {
+      http.Redirect(w, r, "/api/v1", http.StatusMovedPermanently) // 301
+  })
+
 	mux.HandleFunc("/env", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
