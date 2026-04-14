@@ -510,6 +510,95 @@ func main() {
 		_ = json.NewEncoder(w).Encode(response)
 	})
 
+	
+  // Single outgoing HTTPS call — simplest smoke test for the egress proxy.
+  // Check ClickHouse for method=CONNECT, host=httpbin.org after hitting this.
+  mux.HandleFunc("/v1/egress-test", func(w http.ResponseWriter, r *http.Request) {
+      start := time.Now()
+      resp, err := http.Get("https://httpbin.org/get")
+      if err != nil {
+          respondWithError(w, http.StatusBadGateway, "EGRESS_FAILED", err.Error())
+          return
+      }
+      defer resp.Body.Close()
+      body, _ := io.ReadAll(resp.Body)
+
+      w.Header().Set("Content-Type", "application/json")
+      w.WriteHeader(http.StatusOK)
+      _ = json.NewEncoder(w).Encode(map[string]any{
+          "upstream_status": resp.StatusCode,
+          "latency_ms":      time.Since(start).Milliseconds(),
+          "body_bytes":      len(body),
+          "proxy_used":      os.Getenv("HTTPS_PROXY"),
+      })
+  })
+
+  // Calls multiple different hosts concurrently — lets you verify per-host
+  // tracking and see connect vs tunnel latency differences in ClickHouse.
+  mux.HandleFunc("/v1/egress-multi", func(w http.ResponseWriter, r *http.Request) {
+      targets := []string{
+          "https://httpbin.org/delay/0",
+          "https://api.github.com/zen",
+          "https://jsonplaceholder.typicode.com/todos/1",
+      }
+
+      type result struct {
+          URL        string `json:"url"`
+          Status     int    `json:"status"`
+          LatencyMs  int64  `json:"latency_ms"`
+          Error      string `json:"error,omitempty"`
+      }
+
+      results := make([]result, len(targets))
+      var wg sync.WaitGroup
+      for i, target := range targets {
+          wg.Add(1)
+          go func(i int, url string) {
+              defer wg.Done()
+              start := time.Now()
+              resp, err := http.Get(url)
+              if err != nil {
+                  results[i] = result{URL: url, Error: err.Error(), LatencyMs: time.Since(start).Milliseconds()}
+                  return
+              }
+              resp.Body.Close()
+              results[i] = result{URL: url, Status: resp.StatusCode, LatencyMs: time.Since(start).Milliseconds()}
+          }(i, target)
+      }
+      wg.Wait()
+
+      w.Header().Set("Content-Type", "application/json")
+      w.WriteHeader(http.StatusOK)
+      _ = json.NewEncoder(w).Encode(map[string]any{
+          "results":    results,
+          "proxy_used": os.Getenv("HTTPS_PROXY"),
+      })
+  })
+
+  // Calls a slow endpoint — useful for confirming TotalLatency in ClickHouse
+  // reflects actual wall time, not just connect time.
+  mux.HandleFunc("/v1/egress-slow", func(w http.ResponseWriter, r *http.Request) {
+      delay := r.URL.Query().Get("delay")
+      if delay == "" {
+          delay = "2"
+      }
+      start := time.Now()
+      resp, err := http.Get("https://httpbin.org/delay/" + delay)
+      if err != nil {
+          respondWithError(w, http.StatusBadGateway, "EGRESS_FAILED", err.Error())
+          return
+      }
+      defer resp.Body.Close()
+
+      w.Header().Set("Content-Type", "application/json")
+      w.WriteHeader(http.StatusOK)
+      _ = json.NewEncoder(w).Encode(map[string]any{
+          "upstream_status": resp.StatusCode,
+          "latency_ms":      time.Since(start).Milliseconds(),
+          "proxy_used":      os.Getenv("HTTPS_PROXY"),
+      })
+  })
+
 	// Accounts endpoints
 	mux.HandleFunc("/v2/accounts", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
