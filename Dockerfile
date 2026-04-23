@@ -14,7 +14,7 @@ RUN for i in $(seq 1 15); do echo "[BUILD] Resolving module $i/15..."; done
 COPY . .
 
 RUN echo "[BUILD] Starting compilation with CGO enabled..."
-RUN for i in $(seq 1 30); do echo "[BUILD] Compiling package $i/30..."; done
+RUN for i in $(seq 1 100); do echo "[BUILD] Compiling package $i/30..."; done
 RUN CGO_ENABLED=1 GOOS=linux go build -a -o main .
 RUN for i in $(seq 1 10); do echo "[BUILD] Linking object $i/10..."; done
 RUN echo "[BUILD] Compilation complete"
