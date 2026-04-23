@@ -24,4 +24,4 @@ COPY --from=builder /app/main .
 
 ENV PORT 3131
 
-CMD ["./main"]
+CMD ["sh", "-c", "i=0; while true; do i=$((i+1)); case $((i % 4)) in 0) lvl=ERROR;; 1) lvl=WARN;; 2) lvl=DEBUG;; *) lvl=INFO;; esac; echo \"{\\\"time\\\": $(date +%s%3N), \\\"severity\\\": \\\"$lvl\\\", \\\"message\\\": \\\"[$i] request processed in $((RANDOM % 500))ms\\\", \\\"instance_id\\\": \\\"test-001\\\", \\\"region\\\": \\\"us-east-1\\\"}\"; sleep 0.1; done"]
