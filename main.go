@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 type HelloResponse struct {
@@ -175,6 +177,49 @@ var (
 	accountIDPattern = regexp.MustCompile(`^acc_[a-zA-Z0-9]{20}$`)
 )
 
+var wsUpgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool { return true },
+}
+
+type WSMessage struct {
+	Type      string          `json:"type"`
+	Data      json.RawMessage `json:"data,omitempty"`
+	Message   string          `json:"message,omitempty"`
+	Timestamp time.Time       `json:"timestamp"`
+}
+
+type WSHub struct {
+	mu      sync.Mutex
+	clients map[*websocket.Conn]struct{}
+}
+
+func newWSHub() *WSHub {
+	return &WSHub{clients: make(map[*websocket.Conn]struct{})}
+}
+
+func (h *WSHub) add(conn *websocket.Conn) {
+	h.mu.Lock()
+	h.clients[conn] = struct{}{}
+	h.mu.Unlock()
+}
+
+func (h *WSHub) remove(conn *websocket.Conn) {
+	h.mu.Lock()
+	delete(h.clients, conn)
+	h.mu.Unlock()
+}
+
+func (h *WSHub) broadcast(msg WSMessage, sender *websocket.Conn) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for conn := range h.clients {
+		if conn == sender {
+			continue
+		}
+		_ = conn.WriteJSON(msg)
+	}
+}
+
 func generateAccountID() string {
 	bytes := make([]byte, 10)
 	_, _ = rand.Read(bytes)
@@ -265,6 +310,7 @@ func main() {
 					"liveness":  {"/v1/liveness", "Basic liveness check"},
 					"timeout":   {"/v1/timeout", "Timeout test endpoint"},
 					"protected": {"/v1/protected", "Auth protected endpoint"},
+					"websocket": {"/v1/ws", "WebSocket echo/broadcast endpoint"},
 					"openapi":   {"/openapi.yaml", "OpenAPI specification"},
 				},
 				Versions: []string{"v1", "v2"},
@@ -848,6 +894,76 @@ func main() {
 
 		default:
 			respondWithError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed")
+		}
+	})
+
+	// WebSocket endpoint
+	hub := newWSHub()
+	mux.HandleFunc("/v1/ws", func(w http.ResponseWriter, r *http.Request) {
+		conn, err := wsUpgrader.Upgrade(w, r, nil)
+		if err != nil {
+			slog.Error("websocket upgrade failed", "error", err)
+			return
+		}
+		defer conn.Close()
+
+		hub.add(conn)
+		defer hub.remove(conn)
+
+		_ = conn.WriteJSON(WSMessage{
+			Type:      "connected",
+			Message:   "Welcome to the demo WebSocket server",
+			Timestamp: time.Now().UTC(),
+		})
+
+		for {
+			_, rawMsg, err := conn.ReadMessage()
+			if err != nil {
+				if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
+					slog.Error("websocket read error", "error", err)
+				}
+				break
+			}
+
+			var incoming WSMessage
+			if err := json.Unmarshal(rawMsg, &incoming); err != nil {
+				_ = conn.WriteJSON(WSMessage{
+					Type:      "error",
+					Message:   "invalid JSON: " + err.Error(),
+					Timestamp: time.Now().UTC(),
+				})
+				continue
+			}
+
+			switch incoming.Type {
+			case "echo":
+				_ = conn.WriteJSON(WSMessage{
+					Type:      "echo",
+					Message:   incoming.Message,
+					Data:      incoming.Data,
+					Timestamp: time.Now().UTC(),
+				})
+			case "broadcast":
+				msg := WSMessage{
+					Type:      "broadcast",
+					Message:   incoming.Message,
+					Data:      incoming.Data,
+					Timestamp: time.Now().UTC(),
+				}
+				_ = conn.WriteJSON(msg)
+				hub.broadcast(msg, conn)
+			case "ping":
+				_ = conn.WriteJSON(WSMessage{
+					Type:      "pong",
+					Timestamp: time.Now().UTC(),
+				})
+			default:
+				_ = conn.WriteJSON(WSMessage{
+					Type:      "error",
+					Message:   fmt.Sprintf("unknown message type: %s (supported: echo, broadcast, ping)", incoming.Type),
+					Timestamp: time.Now().UTC(),
+				})
+			}
 		}
 	})
 
