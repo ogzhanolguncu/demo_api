@@ -435,6 +435,37 @@ func main() {
 		_ = json.NewEncoder(w).Encode(response)
 	})
 
+	  mux.HandleFunc("/v1/memburn", func(w http.ResponseWriter, r *http.Request) {
+      sizeMB := 100
+      if s := r.URL.Query().Get("size_mb"); s != "" {
+          if parsed, err := strconv.Atoi(s); err == nil && parsed > 0 {
+              sizeMB = parsed
+          }
+      }
+      duration := 30 * time.Second
+      if d := r.URL.Query().Get("duration"); d != "" {
+          if parsed, err := time.ParseDuration(d); err == nil {
+              duration = parsed
+          }
+      }
+
+      buf := make([]byte, sizeMB*1024*1024)
+      // Linux uses lazy allocation — anonymous pages don't count toward RSS until written.
+      // Touch one byte per 4KB page so cgroup memory.current actually reflects the alloc.
+      for i := 0; i < len(buf); i += 4096 {
+          buf[i] = 1
+      }
+
+      time.Sleep(duration)
+      runtime.KeepAlive(buf)
+
+      w.Header().Set("Content-Type", "application/json")
+      _ = json.NewEncoder(w).Encode(map[string]any{
+          "allocated_mb": sizeMB,
+          "held_for":     duration.String(),
+      })
+  })
+
 	// Hello endpoint
 	mux.HandleFunc("/v1/hello", func(w http.ResponseWriter, r *http.Request) {
 		response := HelloResponse{
