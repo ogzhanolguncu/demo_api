@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -554,6 +555,42 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(response)
+	})
+
+	mux.HandleFunc("/v1/burn", func(w http.ResponseWriter, r *http.Request) {
+		duration := 5 * time.Second
+		if d := r.URL.Query().Get("duration"); d != "" {
+			if parsed, err := time.ParseDuration(d); err == nil {
+				duration = parsed
+			}
+		}
+		workers := runtime.NumCPU()
+		if n := r.URL.Query().Get("workers"); n != "" {
+			if parsed, err := strconv.Atoi(n); err == nil && parsed > 0 {
+				workers = parsed
+			}
+		}
+
+		var wg sync.WaitGroup
+		deadline := time.Now().Add(duration)
+		for i := 0; i < workers; i++ {
+			wg.Go(func() {
+				x := 0.0001
+				for time.Now().Before(deadline) {
+					for range 1_000_000 {
+						x = math.Sqrt(x*1.0001) + 1.0
+					}
+				}
+				_ = x
+			})
+		}
+		wg.Wait()
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"burned":  duration.String(),
+			"workers": workers,
+		})
 	})
 
 	// Accounts endpoints
