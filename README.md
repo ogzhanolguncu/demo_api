@@ -26,3 +26,4 @@ dfgdfgdfgdfg
 watch-path-match-test
 supersede-test-1
 supersede-test-2
+supersede-burst-1
