@@ -25,3 +25,4 @@ g12412g4124g124g124g124
 dfgdfgdfgdfg
 watch-path-match-test
 supersede-test-1
+supersede-test-2
