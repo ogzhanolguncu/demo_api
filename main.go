@@ -1,5 +1,7 @@
 package main
 
+// watch-path miss test
+
 import (
 	"crypto/rand"
 	"encoding/hex"
