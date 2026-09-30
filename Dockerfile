@@ -1,3 +1,3 @@
-FROM alpine
-RUN echo "KEBAP start" && sleep 60 && echo "KEBAP done"
-CMD ["sleep", "infinity"]
+  FROM alpine
+  RUN echo "KEBAP run 2" && sleep 60 && echo "KEBAP done"
+  CMD ["sleep", "infinity"]
