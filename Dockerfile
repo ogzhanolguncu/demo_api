@@ -10,7 +10,7 @@ RUN go mod download
 
 RUN echo "KEBAP run www222323231241241242132222e2q2eq2e2qe2qeqwqwqwe2e222" && echo "KEBAP stdout 1" && echo "KEBAP stderr 1" >&2 && echo "KEBAP stdout 2" && echo "KEBAP stderr 2" >&2
 RUN for i in $(seq 1 3000); do echo "KEBAP line $i"; [ $((i % 300)) -eq 0 ] && echo "KEBAP err $i" >&2; done; true
-RUN for i in $(seq 1 20); do echo "KEBAP slow $i"; echo "KEBAP slow err $i" >&2; sleep 3; done
+RUN for i in $(seq 1 1000); do echo "KEBAP before error $i"; done; echo "KEBAP fails now" >&2; exit 1
 
 COPY . .
 
