@@ -8,7 +8,7 @@ RUN apk add --no-cache gcc musl-dev sqlite-dev
 COPY go.mod go.sum* ./
 RUN go mod download
 
-RUN echo "KEBAP run www" && echo "KEBAP stdout 1" && echo "KEBAP stderr 1" >&2 && echo "KEBAP stdout 2" && echo "KEBAP stderr 2" >&2
+RUN echo "KEBAP run www22222" && echo "KEBAP stdout 1" && echo "KEBAP stderr 1" >&2 && echo "KEBAP stdout 2" && echo "KEBAP stderr 2" >&2
 RUN for i in $(seq 1 3000); do echo "KEBAP line $i"; [ $((i % 300)) -eq 0 ] && echo "KEBAP err $i" >&2; done; true
 RUN for i in $(seq 1 20); do echo "KEBAP slow $i"; echo "KEBAP slow err $i" >&2; sleep 3; done
 
