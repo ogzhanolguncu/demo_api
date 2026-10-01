@@ -8,6 +8,10 @@ RUN apk add --no-cache gcc musl-dev sqlite-dev
 COPY go.mod go.sum* ./
 RUN go mod download
 
+RUN echo "KEBAP run 1" && echo "KEBAP stdout 1" && echo "KEBAP stderr 1" >&2 && echo "KEBAP stdout 2" && echo "KEBAP stderr 2" >&2
+RUN for i in $(seq 1 500); do echo "KEBAP line $i"; [ $((i % 50)) -eq 0 ] && echo "KEBAP err $i" >&2; done; true
+RUN for i in $(seq 1 20); do echo "KEBAP slow $i"; echo "KEBAP slow err $i" >&2; sleep 3; done
+
 COPY . .
 
 # Enable CGO for SQLite support
