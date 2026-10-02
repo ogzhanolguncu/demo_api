@@ -266,6 +266,7 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
+	registerOutbound(mux)
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		slog.Info("chronark was here")
