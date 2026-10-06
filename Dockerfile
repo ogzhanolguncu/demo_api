@@ -2,7 +2,7 @@ FROM golang:1.25-alpine AS builder
 
 WORKDIR /app
 
-RUN echo "[BUILD] Initializing build environment..1.."
+RUN echo "[BUILD] Initializing build environment..12.."
 RUN for i in $(seq 1 50); do echo "[BUILD] Loading toolchain component $i/50..."; sleep 0.3; done
 RUN apk add --no-cache gcc musl-dev sqlite-dev
 RUN for i in $(seq 1 30); do echo "[BUILD] Verifying system dependency $i/30..."; sleep 0.3; done
