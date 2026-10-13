@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -28,6 +29,45 @@ func registerOutbound(mux *http.ServeMux) {
 
 	mux.HandleFunc("/v1/outbound", func(w http.ResponseWriter, r *http.Request) { outbound(w, r, http.DefaultClient) })
 	mux.HandleFunc("/v1/outbound/pinned", func(w http.ResponseWriter, r *http.Request) { outbound(w, r, pinned) })
+	mux.HandleFunc("/v1/checkout", checkout)
+}
+
+// checkout makes the three kinds of outbound call a real handler makes:
+//
+//	linked     forwards the request ids, so the call links to this request
+//	unlinked   a plain client call, shown only as a nearby call
+//	background starts after the response, outside the request window
+func checkout(w http.ResponseWriter, r *http.Request) {
+	linked := callOutbound(r.Context(), "https://api.github.com/zen", r.Header)
+	unlinked := callOutbound(r.Context(), "https://httpbin.org/get", nil)
+
+	go func() {
+		time.Sleep(2 * time.Second)
+		_ = callOutbound(context.Background(), "https://httpbin.org/delay/1", nil)
+	}()
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]outboundResult{"linked": linked, "unlinked": unlinked})
+}
+
+func callOutbound(ctx context.Context, target string, forward http.Header) outboundResult {
+	started := time.Now()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return outboundResult{Error: err.Error(), AppMs: msSince(started)}
+	}
+	for _, name := range []string{"X-Unkey-Request-Id", "Traceparent"} {
+		if v := forward.Get(name); v != "" {
+			req.Header.Set(name, v)
+		}
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return outboundResult{Error: err.Error(), AppMs: msSince(started)}
+	}
+	bytes, _ := io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	return outboundResult{Status: resp.StatusCode, Bytes: bytes, Proto: resp.Proto, AppMs: msSince(started)}
 }
 
 type outboundResult struct {
