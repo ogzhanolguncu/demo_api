@@ -305,7 +305,7 @@ func main() {
 			},
 			API: APIInfo{
 				Endpoints: map[string]EndpointMeta{
-					"health":    {"/v2/health", "Service health check as sean"},
+					"health":    {"/v2/health", "OZZZZZ"},
 					"greeting":  {"/v2/greeting", "Personalized greeting service"},
 					"accounts":  {"/v2/accounts", "Account management endpoints"},
 					"debug":     {"/v1/debug", "Request debugging utility"},
