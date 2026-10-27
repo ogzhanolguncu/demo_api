@@ -11,6 +11,7 @@ import (
 func main() {
 	http.HandleFunc("/checkout", checkout)
 	http.HandleFunc("/pinned", pinned)
+	http.HandleFunc("/hang", hang)
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok\n")) })
 	http.ListenAndServe(":"+cmp.Or(os.Getenv("PORT"), "8080"), nil)
 }
@@ -37,6 +38,12 @@ func call(r *http.Request, url string) {
 	if resp, err := http.DefaultClient.Do(req); err == nil {
 		resp.Body.Close()
 	}
+}
+
+// Accept the request, write no byte, and hold the connection until the gateway
+// or the caller gives up. Every held request is one slot taken from frontline.
+func hang(w http.ResponseWriter, r *http.Request) {
+	<-r.Context().Done()
 }
 
 // A client that trusts only the system certificates, like an SDK that pins.

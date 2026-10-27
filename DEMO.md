@@ -49,3 +49,33 @@ kubectl -n unkey patch configmap egress-override --type merge -p '{"data":{"mode
 ## 6. Questions
 
 Open the flow diagram and click the boxes.
+
+## 5. A request that never answers (frontline slot test)
+
+`/hang` accepts the request, writes nothing, and waits for the caller to give
+up. Each held request occupies one gateway connection and one upstream wait.
+
+```bash
+oha -z 60s -c 500 $H/hang &
+sleep 5
+time curl -s -o /dev/null -w '%{http_code}\n' $H/
+```
+
+While the flood runs, check the healthy route:
+
+- fast `200`: frontline absorbs the hold, no finding
+- slow or hung: one app is taking gateway slots from the rest
+
+Watch connections, not CPU. CPU stays flat because a hold costs a goroutine and
+a socket, not cycles:
+
+```bash
+kubectl -n frontline exec deploy/frontline -- sh -c 'ls /proc/1/fd | wc -l'
+```
+
+Read the number before, during, and after. If it climbs with `-c` and does not
+come back down, the hold is not bounded.
+
+Do not wait out the timeout. The default request timeout is 15 minutes. Growth
+with flat CPU is the finding; the deadline only says how long a slot stays
+taken.
