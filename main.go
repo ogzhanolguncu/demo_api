@@ -49,8 +49,8 @@ func main() {
 	}
 
 	http.HandleFunc("GET /{$}", status)
-	http.HandleFunc("POST /visits", addVisit)
-	http.HandleFunc("GET /visits", countVisits)
+	http.HandleFunc("POST /counters/{name}", increment)
+	http.HandleFunc("GET /counters", listCounters)
 	http.HandleFunc("GET /slow", slow)
 	log.Fatal(http.ListenAndServe(":"+cmp.Or(os.Getenv("PORT"), "8080"), nil))
 }
@@ -126,30 +126,50 @@ func describe(ctx context.Context, d database, c *check) error {
 
 // Fails until migrate.sql has run: the credential Unkey gives the app can
 // read and write rows but cannot create tables.
-func addVisit(w http.ResponseWriter, r *http.Request) {
+func increment(w http.ResponseWriter, r *http.Request) {
 	d, ok := pick(w, r)
 	if !ok {
 		return
 	}
-	who := cmp.Or(r.URL.Query().Get("who"), "anonymous")
-	if _, err := d.db.ExecContext(r.Context(), "INSERT INTO visits (who) VALUES ($1)", who); err != nil {
+	name := r.PathValue("name")
+	var value int64
+	err := d.db.QueryRowContext(r.Context(), `
+		INSERT INTO counters (name, value) VALUES ($1, 1)
+		ON CONFLICT (name) DO UPDATE SET value = counters.value + 1, updated_at = now()
+		RETURNING value`, name).Scan(&value)
+	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	countVisits(w, r)
+	writeJSON(w, http.StatusOK, map[string]any{"database": d.name, "counter": name, "value": value})
 }
 
-func countVisits(w http.ResponseWriter, r *http.Request) {
+func listCounters(w http.ResponseWriter, r *http.Request) {
 	d, ok := pick(w, r)
 	if !ok {
 		return
 	}
-	var total int64
-	if err := d.db.QueryRowContext(r.Context(), "SELECT count(*) FROM visits").Scan(&total); err != nil {
+	rows, err := d.db.QueryContext(r.Context(), "SELECT name, value FROM counters ORDER BY name")
+	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"database": d.name, "visits": total})
+	defer rows.Close()
+	counters := map[string]int64{}
+	for rows.Next() {
+		var name string
+		var value int64
+		if err := rows.Scan(&name, &value); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		counters[name] = value
+	}
+	if err := rows.Err(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"database": d.name, "counters": counters})
 }
 
 // A deliberately expensive query, so it shows up under Slow queries in

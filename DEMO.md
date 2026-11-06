@@ -1,9 +1,13 @@
 # PlanetScale demo
 
-Set `H` to the app's host first, for example:
+`./demo.sh` runs every command below and pauses between steps. It asks for
+the migration URL without showing it. Run `./demo.sh reset` first to drop every
+table from an earlier run. Needs `jq`, and `psql` or Docker.
+
+To run the commands by hand, set `H` to the app's host first:
 
 ```bash
-H=https://demo-api-my-project-local.unkey.local
+H=https://my-project-demo-api-local.unkey.local
 ```
 
 The project has three databases: `kebap-rotate` (Postgres, prefix
@@ -38,7 +42,7 @@ Each env var, whether Unkey set it, and what the server says. No values.
 ## 4. Least privilege and the migration URL (3 min)
 
 ```bash
-curl -s -X POST $H/visits   # fails: relation "visits" does not exist
+curl -s -X POST $H/counters/kebap   # fails: relation "counters" does not exist
 ```
 
 The app's credential reads and writes rows. It cannot create tables.
@@ -47,9 +51,9 @@ In the panel, Migrations, Get migration URL for `main`, then:
 
 ```bash
 psql "$MIGRATION_URL" -f migrate.sql
-curl -s -X POST "$H/visits?who=oz"      # {"visits": 1}
-curl -s -X POST "$H/visits?who=team"    # {"visits": 2}
-curl -s "$H/visits?db=postgres-readonly"
+curl -s -X POST $H/counters/kebap      # {"value": 1}
+curl -s -X POST $H/counters/kebap      # {"value": 2}
+curl -s "$H/counters?db=postgres-direct"
 ```
 
 The migration URL expires on its own. Unkey shows it once and does not store
@@ -57,8 +61,8 @@ it.
 
 ## 4b. Browse data (2 min, local preview, not shipping)
 
-In the `kebap-rotate` panel, Browse data. Open `visits`: the rows the app just
-wrote. The browser uses its own read-only credential, which expires in 5
+In the `kebap-rotate` panel, Browse data. Open `counters`: the values the app
+just wrote. The browser uses its own read-only credential, which expires in 5
 minutes and is deleted on close.
 
 ## 5. Slow queries (2 min)
