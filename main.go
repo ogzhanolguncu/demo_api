@@ -14,7 +14,8 @@ import (
 	"time"
 
 	"github.com/go-sql-driver/mysql"
-	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
 )
 
 // Each database Unkey connects, by the env var it writes. The prefix is the
@@ -58,7 +59,14 @@ func main() {
 // driver takes its own DSN, so the URL is translated here.
 func open(raw string) (*sql.DB, error) {
 	if !strings.HasPrefix(raw, "mysql://") {
-		return sql.Open("pgx", raw)
+		cfg, err := pgx.ParseConfig(raw)
+		if err != nil {
+			return nil, err
+		}
+		// DATABASE_URL goes through PgBouncer in transaction mode, where named
+		// prepared statements from two app connections can collide.
+		cfg.DefaultQueryExecMode = pgx.QueryExecModeExec
+		return stdlib.OpenDB(*cfg), nil
 	}
 	u, err := url.Parse(raw)
 	if err != nil {
