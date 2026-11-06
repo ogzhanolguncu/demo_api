@@ -123,7 +123,8 @@ func addVisit(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if _, err := d.db.ExecContext(r.Context(), "INSERT INTO visits (path) VALUES ($1)", r.URL.Path); err != nil {
+	who := cmp.Or(r.URL.Query().Get("who"), "anonymous")
+	if _, err := d.db.ExecContext(r.Context(), "INSERT INTO visits (who) VALUES ($1)", who); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}

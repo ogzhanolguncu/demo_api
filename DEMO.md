@@ -47,12 +47,19 @@ In the panel, Migrations, Get migration URL for `main`, then:
 
 ```bash
 psql "$MIGRATION_URL" -f migrate.sql
-curl -s -X POST $H/visits   # {"visits": 1}
+curl -s -X POST "$H/visits?who=oz"      # {"visits": 1}
+curl -s -X POST "$H/visits?who=team"    # {"visits": 2}
 curl -s "$H/visits?db=postgres-readonly"
 ```
 
 The migration URL expires on its own. Unkey shows it once and does not store
 it.
+
+## 4b. Browse data (2 min, local preview, not shipping)
+
+In the `kebap-rotate` panel, Browse data. Open `visits`: the rows the app just
+wrote. The browser uses its own read-only credential, which expires in 5
+minutes and is deleted on close.
 
 ## 5. Slow queries (2 min)
 

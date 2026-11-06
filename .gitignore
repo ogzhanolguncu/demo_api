@@ -1,25 +1,5 @@
-# Binaries
-demo_api
-*.exe
-*.dll
-*.so
-*.dylib
-
-# SQLite databases
-*.db
-*.db-journal
-
-# Environment files
+/main
+/demo_api
 .env
-.env.local
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# OS
 .DS_Store
-Thumbs.db
+*.db
