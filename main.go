@@ -18,20 +18,23 @@ import (
 	"github.com/jackc/pgx/v5/stdlib"
 )
 
-// Each database Unkey connects, by the env var it writes. The prefix is the
-// one chosen when the database was added to the project.
+// Each database Unkey connects, by the env var it writes. The names are the
+// defaults Unkey derives from the PlanetScale database name.
 var databases = []database{
-	{name: "postgres", env: "DATABASE_URL"},
-	{name: "postgres-direct", env: "DATABASE_UNPOOLED_URL"},
-	{name: "postgres-readonly", env: "DATABASE_READONLY_URL"},
-	{name: "neki", env: "NEKI_URL"},
-	{name: "vitess", env: "OZ_VITESS_TEST_URL"},
+	{name: "postgres", env: "TESTING_FINALS_URL"},
+	{name: "postgres-direct", env: "TESTING_FINALS_UNPOOLED_URL"},
+	{name: "postgres-readonly", env: "TESTING_FINALS_READONLY_URL"},
+	{name: "neki", env: "TEST_NEKI_URL"},
+	{name: "neki-readonly", env: "TEST_NEKI_READONLY_URL"},
+	{name: "vitess", env: "TEST_VITESS_URL"},
+	{name: "vitess-readonly", env: "TEST_VITESS_READONLY_URL"},
 }
 
 type database struct {
-	name string
-	env  string
-	db   *sql.DB
+	name  string
+	env   string
+	db    *sql.DB
+	mysql bool
 }
 
 func main() {
@@ -46,6 +49,7 @@ func main() {
 			continue
 		}
 		databases[i].db = db
+		databases[i].mysql = strings.HasPrefix(raw, "mysql://")
 	}
 
 	http.HandleFunc("GET /{$}", status)
@@ -114,7 +118,7 @@ func status(w http.ResponseWriter, r *http.Request) {
 }
 
 func describe(ctx context.Context, d database, c *check) error {
-	if d.name == "vitess" {
+	if d.mysql {
 		return d.db.QueryRowContext(ctx, "SELECT version(), current_user()").Scan(&c.Server, &c.User)
 	}
 	var replica bool
@@ -133,15 +137,36 @@ func increment(w http.ResponseWriter, r *http.Request) {
 	}
 	name := r.PathValue("name")
 	var value int64
-	err := d.db.QueryRowContext(r.Context(), `
-		INSERT INTO counters (name, value) VALUES ($1, 1)
-		ON CONFLICT (name) DO UPDATE SET value = counters.value + 1, updated_at = now()
-		RETURNING value`, name).Scan(&value)
+	err := incrementCounter(r.Context(), d, name, &value)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"database": d.name, "counter": name, "value": value})
+}
+
+// Vitess has no RETURNING, so MySQL writes and reads back in one transaction.
+func incrementCounter(ctx context.Context, d database, name string, value *int64) error {
+	if !d.mysql {
+		return d.db.QueryRowContext(ctx, `
+			INSERT INTO counters (name, value) VALUES ($1, 1)
+			ON CONFLICT (name) DO UPDATE SET value = counters.value + 1, updated_at = now()
+			RETURNING value`, name).Scan(value)
+	}
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO counters (name, value) VALUES (?, 1)
+		ON DUPLICATE KEY UPDATE value = value + 1`, name); err != nil {
+		return err
+	}
+	if err := tx.QueryRowContext(ctx, "SELECT value FROM counters WHERE name = ?", name).Scan(value); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func listCounters(w http.ResponseWriter, r *http.Request) {
@@ -188,12 +213,11 @@ func slow(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"database": d.name, "rows": n, "took_ms": time.Since(start).Milliseconds()})
 }
 
-// ?db=postgres (default), postgres-direct, postgres-readonly or neki. Vitess
-// only takes part in the status check.
+// ?db= one of the names in databases; postgres is the default.
 func pick(w http.ResponseWriter, r *http.Request) (database, bool) {
 	name := cmp.Or(r.URL.Query().Get("db"), "postgres")
 	for _, d := range databases {
-		if d.name != name || d.name == "vitess" {
+		if d.name != name {
 			continue
 		}
 		if d.db == nil {
