@@ -56,6 +56,9 @@ func main() {
 	http.HandleFunc("POST /counters/{name}", increment)
 	http.HandleFunc("GET /counters", listCounters)
 	http.HandleFunc("GET /slow", slow)
+	http.HandleFunc("POST /notes", addNote)
+	http.HandleFunc("GET /notes", countNotes)
+	http.HandleFunc("POST /ddl-check", ddlCheck)
 	log.Fatal(http.ListenAndServe(":"+cmp.Or(os.Getenv("PORT"), "8080"), nil))
 }
 
@@ -236,4 +239,51 @@ func writeJSON(w http.ResponseWriter, code int, body any) {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	_ = enc.Encode(body)
+}
+
+// Needs migrate_notes.sql: the notes table only exists after a migration URL
+// created it
+func addNote(w http.ResponseWriter, r *http.Request) {
+	d, ok := pick(w, r)
+	if !ok {
+		return
+	}
+	query := "INSERT INTO notes (body) VALUES ($1)"
+	if d.mysql {
+		query = "INSERT INTO notes (body) VALUES (?)"
+	}
+	if _, err := d.db.ExecContext(r.Context(), query, "KEBAP"); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	countNotes(w, r)
+}
+
+func countNotes(w http.ResponseWriter, r *http.Request) {
+	d, ok := pick(w, r)
+	if !ok {
+		return
+	}
+	var n int64
+	if err := d.db.QueryRowContext(r.Context(), "SELECT count(*) FROM notes").Scan(&n); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"database": d.name, "notes": n})
+}
+
+// The app's credential must not change the schema; this reports what the
+// server answers to a CREATE TABLE
+func ddlCheck(w http.ResponseWriter, r *http.Request) {
+	d, ok := pick(w, r)
+	if !ok {
+		return
+	}
+	_, err := d.db.ExecContext(r.Context(), "CREATE TABLE ddl_check_kebap (id int PRIMARY KEY)")
+	if err == nil {
+		_, _ = d.db.ExecContext(r.Context(), "DROP TABLE ddl_check_kebap")
+		writeJSON(w, http.StatusOK, map[string]any{"database": d.name, "ddl_allowed": true})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"database": d.name, "ddl_allowed": false, "error": err.Error()})
 }
